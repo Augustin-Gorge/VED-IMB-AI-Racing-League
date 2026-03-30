@@ -183,9 +183,9 @@ def update_state(c, alpha_deg, max_dist, speed_ms, turn_radius):
         c.phase_timer += 1; c.prev_max_dist = max_dist; return
 
     # Dynamic distance thresholds based on speed and curvature
-    dist_turn_in = max(32.0, min(70.0, speed_ms * 1.6))  # earlier approach trigger
-    dist_apex = max(25.0, min(60.0, speed_ms * 1.2))     # 1.2 seconds lookahead
-    dist_approach = max(60.0, min(100.0, speed_ms * 2.5)) # 2.5 seconds lookahead
+    dist_turn_in = max(32.0, min(70.0, speed_ms * 1.6))
+    dist_apex = max(25.0, min(60.0, speed_ms * 1.2))
+    dist_approach = max(60.0, min(100.0, speed_ms * 2.5))
 
     if c.state == STATE_STRAIGHT:
         if abs(alpha_deg) > APPROACH_TRIGGER_DEG:
@@ -302,7 +302,6 @@ def compute_target_speed(distances, max_dist, curvature, mu_eff, a_brake):
 
 def compute_steering(S, target_pos, c):
     P=0.38; YA=0.25; MAX_R=0.10
-    # Inspired by 1m30: stronger yaw damping, especially at lower speed.
     speed_kmh = max(1.0, S.get('speedX', 0.0))
     low_speed = max(0.0, min(1.0, (70.0 - speed_kmh) / 70.0))
     D = (14.0 + 10.0 * low_speed) / math.pi
@@ -342,9 +341,10 @@ def compute_pedals(S, R, target_speed, max_dist, max_thr, a_brake):
         gap    = max(0.0, (vt-v)/max(1.0,vt))
         acc    = max(raw, 0.50+0.50*gap) if v<vt else raw
         acc    = min(acc, 1.0-abs(R['steer'])*1.05)
-        # Avoid long coast plateaus near target speed when grip margin is still available.
-        if speed > 30.0 and speed >= target_speed-8.0:
-            cruise_floor = 0.24 * max(0.0, 1.0 - abs(R['steer'])/0.85)
+        # Mild cruise floor to reduce coasting without forcing the car wide in corners.
+        if speed > 35.0 and speed >= target_speed-6.0 and abs(S.get('trackPos',0.0)) < 0.82 and abs(S.get('angle',0.0)) < 0.12:
+            steer_factor = max(0.0, 1.0 - abs(R['steer'])/0.85)
+            cruise_floor = 0.18 + 0.10 * steer_factor
             acc = max(acc, cruise_floor)
         acc    = min(acc, max_thr)
         if speed < 10.0:           acc = max_thr
@@ -352,8 +352,8 @@ def compute_pedals(S, R, target_speed, max_dist, max_thr, a_brake):
         return max(0.0, min(1.0, acc)), 0.0
     else:
         if speed < 15.0: return 0.0, 0.0
-        brk = (speed-target_speed)/13.5
-        if abs(S['angle']) > EMERGENCY_BRAKE_YAW: brk = max(brk, 0.5)
+        brk = (speed-target_speed)/12.5
+        if abs(S['angle']) > EMERGENCY_BRAKE_YAW: brk = max(brk, 0.55)
         brk = min(brk, math.sqrt(max(0.0, 1.0-R['steer']**2)))
         return 0.0, max(0.0, min(1.0, brk))
 
@@ -376,7 +376,7 @@ def traction_control(S, accel, max_thr):
     if not TRACTION_CONTROL_ON: return accel
     if 'wheelSpinVel' not in S or len(S['wheelSpinVel'])!=4: return accel
     spin = (S['wheelSpinVel'][2]+S['wheelSpinVel'][3])-(S['wheelSpinVel'][0]+S['wheelSpinVel'][1])
-    if spin > (12.0 if abs(S.get('trackPos',0))>1.0 else 3.5): accel -= 0.08
+    if spin > (12.0 if abs(S.get('trackPos',0))>1.0 else 3.8): accel -= 0.07
     return max(0.0, min(max_thr, accel))
 
 
@@ -458,9 +458,25 @@ def update_recovery(c, S, R, track_pos, speed_x):
             return True
 
     # Récupération normale en avançant (hors-piste)
-    recover_frames = int(max(2, min(8, 0.12 * abs(speed_x))))
+    abs_speed = abs(speed_x)
+    # Faster reaction when outside the track at high speed.
+    if abs_speed > 70.0:
+        recover_frames = 1
+    elif abs_speed > 50.0:
+        recover_frames = 2
+    elif abs_speed > 35.0:
+        recover_frames = 3
+    else:
+        recover_frames = 4
     if abs(track_pos) > 1.0 and c.off_track_timer > recover_frames and not is_wrong_way:
         abs_speed = abs(speed_x)
+
+        if abs(track_pos) > 1.08 and abs_speed > 45.0:
+            R['gear'] = 1
+            R['accel'] = 0.0
+            R['brake'] = min(1.0, 0.45 + (abs_speed - 45.0) / 40.0)
+            R['steer'] = max(-1.0, min(1.0, -track_pos * 1.15))
+            return True
         
         target_angle = max(-0.8, min(0.8, -track_pos * 0.4))
         steer_error = _ang - target_angle
