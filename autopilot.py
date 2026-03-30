@@ -144,8 +144,8 @@ STATE_RECOVERY = "RECOVERY"
 CORNER_THRESHOLD_DEG = 8.0
 PHASE_MIN_FRAMES = 22
 
-AMP_OUTSIDE = 0.70; AMP_APEX = 0.82; AMP_EXIT = 0.65 
-SMOOTH_STRAIGHT = 0.06; SMOOTH_CORNER = 0.10; SMOOTH_APPROACH = 0.06
+AMP_OUTSIDE = 0.60; AMP_APEX = 0.80; AMP_EXIT = 0.65 
+SMOOTH_STRAIGHT = 0.18; SMOOTH_CORNER = 0.10; SMOOTH_APPROACH = 0.06
 
 def circ_ease_out(t):
     t = max(0.0, min(1.0, t))
@@ -265,9 +265,18 @@ def compute_steering(S, target_pos, c):
     wp  = S['trackPos']
     wg  = -(wp-0.87)*2.5 if wp>0.87 else -(wp+0.87)*2.5 if wp<-0.87 else 0.0
     raw = max(-1.0, min(1.0, sp+sd+wg))
+
+    # Dampen micro-corrections on straights to avoid left-right oscillation.
+    if c.state == STATE_STRAIGHT:
+        if abs(wp) < 0.12 and abs(c.yaw_f) < 0.03:
+            raw *= 0.55
+        if abs(wp) < 0.04 and abs(c.yaw_f) < 0.015:
+            raw = 0.0
+
     if abs(err) < 0.40:
         d = raw-c.prev_steer
-        if abs(d)>MAX_R: raw = c.prev_steer+math.copysign(MAX_R,d)
+        max_rate = 0.06 if c.state == STATE_STRAIGHT else MAX_R
+        if abs(d)>max_rate: raw = c.prev_steer+math.copysign(max_rate,d)
     c.prev_steer = raw
     return raw, sp, sd
 
