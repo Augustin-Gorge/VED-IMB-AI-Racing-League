@@ -603,7 +603,6 @@ def generate_report(csv_path):
         ('Recovery',             panel_recovery_timeline(df)),
         ('Wheelspin & TC',       panel_wheelspin(df)),
         ('Sensors & Curvature',  panel_curvature_sensor(df)),
-        ('Circuit map',          panel_circuit_map(df)),
         ('Lateral speed',        panel_lateral_velocity(df)),
     ]
     imgs = [(title, fig_to_b64(fig)) for title, fig in panels]
