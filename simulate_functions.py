@@ -234,6 +234,44 @@ def run_corkscrew_simulation(speed_ms=30.0):
     return run_profile(name="corkscrew", speed_ms=speed_ms, samples=samples)
 
 
+def compute_sim_metrics(rows):
+    if not rows:
+        return {
+            "frames": 0,
+            "approach_frames": 0,
+            "turn_in_frames": 0,
+            "exit_frames": 0,
+            "mean_abs_target_pos_approach": 0.0,
+            "mean_abs_target_pos_turn_in": 0.0,
+            "p90_abs_target_pos_turn_in": 0.0,
+            "approach_to_turn_in": 0,
+            "turn_in_to_exit": 0,
+        }
+
+    import pandas as pd
+
+    df = pd.DataFrame(rows)
+
+    app = df[df["state"] == ap.STATE_APPROACH]
+    ti = df[df["state"] == ap.STATE_TURN_IN]
+    ex = df[df["state"] == ap.STATE_EXIT]
+    tr = df["state"].shift(1).fillna(df["state"]) + "->" + df["state"]
+
+    import numpy as np
+
+    return {
+        "frames": int(len(df)),
+        "approach_frames": int(len(app)),
+        "turn_in_frames": int(len(ti)),
+        "exit_frames": int(len(ex)),
+        "mean_abs_target_pos_approach": float(app["target_pos"].abs().mean()) if len(app) else 0.0,
+        "mean_abs_target_pos_turn_in": float(ti["target_pos"].abs().mean()) if len(ti) else 0.0,
+        "p90_abs_target_pos_turn_in": float(np.percentile(np.abs(ti["target_pos"].values), 90)) if len(ti) else 0.0,
+        "approach_to_turn_in": int((tr == f"{ap.STATE_APPROACH}->{ap.STATE_TURN_IN}").sum()),
+        "turn_in_to_exit": int((tr == f"{ap.STATE_TURN_IN}->{ap.STATE_EXIT}").sum()),
+    }
+
+
 def save_rows(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -244,9 +282,16 @@ def save_rows(path, rows):
 
 if __name__ == "__main__":
     all_rows = []
-    all_rows.extend(run_simulation("medium_speed", speed_ms=24.0, steps=260))
-    all_rows.extend(run_simulation("high_speed", speed_ms=34.0, steps=260))
-    all_rows.extend(run_corkscrew_simulation(speed_ms=28.0))
+    medium = run_simulation("medium_speed", speed_ms=24.0, steps=260)
+    high = run_simulation("high_speed", speed_ms=34.0, steps=260)
+    cork = run_corkscrew_simulation(speed_ms=28.0)
+    all_rows.extend(medium)
+    all_rows.extend(high)
+    all_rows.extend(cork)
+
+    print("Sim metrics medium:", compute_sim_metrics(medium))
+    print("Sim metrics high:", compute_sim_metrics(high))
+    print("Sim metrics corkscrew:", compute_sim_metrics(cork))
 
     out = Path(__file__).resolve().parent / "report" / "sim_state_trace.csv"
     save_rows(out, all_rows)
