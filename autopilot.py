@@ -145,7 +145,7 @@ CORNER_THRESHOLD_DEG = 8.0
 APPROACH_TRIGGER_DEG = 6.5
 PHASE_MIN_FRAMES = 22
 
-AMP_OUTSIDE = 0.50; AMP_APEX = 0.80; AMP_EXIT = 0.50 
+AMP_OUTSIDE = 0.64; AMP_APEX = 0.94; AMP_EXIT = 0.60 
 SMOOTH_STRAIGHT = 0.18; SMOOTH_CORNER = 0.10; SMOOTH_APPROACH = 0.06
 
 def circ_ease_out(t):
@@ -247,14 +247,28 @@ def get_target_lateral(c):
     return 0.0
 
 
-def stabilize_target_dynamic(raw_target, track_pos, max_dist, speed_kmh):
+def stabilize_target_dynamic(raw_target, track_pos, max_dist, speed_kmh, state=STATE_STRAIGHT):
     # Dynamic center pull: stronger near edges, with short horizon, and at low speed.
     edge = max(0.0, min(1.0, (abs(track_pos) - 0.72) / 0.36))
     edge_hard = max(0.0, min(1.0, (abs(track_pos) - 0.92) / 0.06))
     horizon = max(0.0, min(1.0, (10.0 - max_dist) / 10.0))
     low_speed = max(0.0, min(1.0, (45.0 - speed_kmh) / 45.0))
     center_pull = max(edge, edge_hard, horizon * (0.45 + 0.55 * low_speed))
+    if state == STATE_APPROACH:
+        center_pull *= 0.75
+    elif state == STATE_TURN_IN:
+        center_pull *= 0.68
     return raw_target * (1.0 - center_pull)
+
+
+def shape_geometric_line(raw_target, state, alpha_deg, speed_kmh):
+    if state not in (STATE_APPROACH, STATE_TURN_IN, STATE_EXIT):
+        return raw_target
+    turn_vis = max(0.0, min(1.0, abs(alpha_deg) / 35.0))
+    speed_fac = max(0.0, min(1.0, speed_kmh / 120.0))
+    phase_gain = 1.12 if state == STATE_TURN_IN else 1.08 if state == STATE_APPROACH else 1.05
+    gain = phase_gain + 0.22 * turn_vis + 0.12 * speed_fac
+    return max(-0.98, min(0.98, raw_target * gain))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -268,10 +282,10 @@ def _v_apex_from_k(k, mu_eff):
 
 def compute_target_speed(distances, max_dist, curvature, mu_eff, a_brake):
     # Keep extra braking reserve so deceleration starts earlier before the apex.
-    d_b = max(0.0, max_dist-20.0)
+    d_b = max(0.0, max_dist-10.0)
     
     def tgt_from_k(k):
-        return min(MAX_SPEED_KMH, math.sqrt(max(0.0,_v_apex_from_k(k,mu_eff)**2*0.72 + 2.0*a_brake*d_b))*3.6)
+        return min(MAX_SPEED_KMH, math.sqrt(max(0.0,_v_apex_from_k(k,mu_eff)**2*0.82 + 2.0*a_brake*d_b))*3.6)
         
     target = tgt_from_k(curvature)
     for i in range(1, 18):
@@ -327,14 +341,18 @@ def compute_pedals(S, R, target_speed, max_dist, max_thr, a_brake):
         raw    = max(0.0, (vt**2-v**2)/(2.0*d*A_PHYS_ACC))
         gap    = max(0.0, (vt-v)/max(1.0,vt))
         acc    = max(raw, 0.50+0.50*gap) if v<vt else raw
-        acc    = min(acc, 1.0-abs(R['steer'])*1.4)
+        acc    = min(acc, 1.0-abs(R['steer'])*1.05)
+        # Avoid long coast plateaus near target speed when grip margin is still available.
+        if speed > 30.0 and speed >= target_speed-8.0:
+            cruise_floor = 0.24 * max(0.0, 1.0 - abs(R['steer'])/0.85)
+            acc = max(acc, cruise_floor)
         acc    = min(acc, max_thr)
         if speed < 10.0:           acc = max_thr
         if S['rpm'] > REV_LIMITER: acc = 0.0
         return max(0.0, min(1.0, acc)), 0.0
     else:
         if speed < 15.0: return 0.0, 0.0
-        brk = (speed-target_speed)/10.0
+        brk = (speed-target_speed)/13.5
         if abs(S['angle']) > EMERGENCY_BRAKE_YAW: brk = max(brk, 0.5)
         brk = min(brk, math.sqrt(max(0.0, 1.0-R['steer']**2)))
         return 0.0, max(0.0, min(1.0, brk))
@@ -358,7 +376,7 @@ def traction_control(S, accel, max_thr):
     if not TRACTION_CONTROL_ON: return accel
     if 'wheelSpinVel' not in S or len(S['wheelSpinVel'])!=4: return accel
     spin = (S['wheelSpinVel'][2]+S['wheelSpinVel'][3])-(S['wheelSpinVel'][0]+S['wheelSpinVel'][1])
-    if spin > (10.0 if abs(S.get('trackPos',0))>1.0 else 2.0): accel -= 0.1
+    if spin > (12.0 if abs(S.get('trackPos',0))>1.0 else 3.5): accel -= 0.08
     return max(0.0, min(max_thr, accel))
 
 
@@ -568,7 +586,8 @@ def drive(c):
     update_state(c, alpha_deg, max_dist, speed_kmh/3.6, turn_radius)
     t_phase    = min(1.0, c.phase_timer/max(1,c.phase_duration))
     raw_target = get_target_lateral(c)
-    raw_target = stabilize_target_dynamic(raw_target, track_pos, max_dist, speed_kmh)
+    raw_target = shape_geometric_line(raw_target, c.state, alpha_deg, speed_kmh)
+    raw_target = stabilize_target_dynamic(raw_target, track_pos, max_dist, speed_kmh, c.state)
     smooth = SMOOTH_APPROACH if c.state==STATE_APPROACH else SMOOTH_STRAIGHT if c.state==STATE_STRAIGHT else SMOOTH_CORNER
     c.target_pos_filtered = smooth*raw_target + (1.0-smooth)*c.target_pos_filtered
 

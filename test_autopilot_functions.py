@@ -169,6 +169,16 @@ class TestAutopilotFunctions(unittest.TestCase):
         )
         self.assertAlmostEqual(constrained, raw, places=6)
 
+    def test_shape_geometric_line_amplifies_turn_in(self):
+        raw = 0.40
+        shaped = ap.shape_geometric_line(raw, ap.STATE_TURN_IN, alpha_deg=20.0, speed_kmh=90.0)
+        self.assertGreater(abs(shaped), abs(raw))
+
+    def test_shape_geometric_line_no_change_in_straight(self):
+        raw = -0.35
+        shaped = ap.shape_geometric_line(raw, ap.STATE_STRAIGHT, alpha_deg=5.0, speed_kmh=120.0)
+        self.assertAlmostEqual(shaped, raw, places=6)
+
     def test_recovery_starts_earlier_offtrack(self):
         c = make_controller()
         c.off_track_timer = 4

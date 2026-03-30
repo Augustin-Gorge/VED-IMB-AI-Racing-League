@@ -59,6 +59,8 @@
 - Test → analyze → iterate
 - Stability > speed
 - When you discover a bug, a problem that isn't clearly written on the report.md and report.html, add it so it shows up next time.
+- Do not hesitate to create helper tools/scripts when they improve analysis or reliability.
+- Do not hesitate to modify tests and telemetry outputs when needed to make issues reproducible and measurable.
 
 ---
 
