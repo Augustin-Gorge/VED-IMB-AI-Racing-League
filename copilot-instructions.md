@@ -58,6 +58,7 @@
 - One change at a time
 - Test → analyze → iterate
 - Stability > speed
+- When you discover a bug, a problem that isn't clearly written on the report.md and report.html, add it so it shows up next time.
 
 ---
 

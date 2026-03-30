@@ -94,6 +94,95 @@ class TestAutopilotFunctions(unittest.TestCase):
         steer, _, _ = ap.compute_steering(S=S, target_pos=0.0, c=c)
         self.assertAlmostEqual(steer, 0.0, places=4)
 
+    def test_turn_in_transitions_to_exit_on_opening(self):
+        c = make_controller()
+        c.state = ap.STATE_TURN_IN
+        c.phase_timer = ap.PHASE_MIN_FRAMES + 12
+        c.phase_duration = 40
+        c.prev_max_dist = 36.4
+        c.exit_arc_m = 20.0
+
+        # Reproduces the reported situation: angle collapses, distance nearly flat.
+        ap.update_state(c, alpha_deg=0.0, max_dist=36.4, speed_ms=17.0, turn_radius=50.0)
+        self.assertEqual(c.state, ap.STATE_EXIT)
+
+    def test_exit_recenters_when_near_edge(self):
+        c = make_controller()
+        c.state = ap.STATE_EXIT
+        c.turn_sign = -1.0
+        c.phase_timer = 20
+        c.phase_duration = 40
+        c.last_track_pos = -1.02
+        target = ap.get_target_lateral(c)
+        self.assertAlmostEqual(target, 0.0, places=6)
+
+    def test_exit_force_to_straight_without_timer_delay(self):
+        c = make_controller()
+        c.state = ap.STATE_EXIT
+        c.phase_timer = 2
+        c.phase_duration = 50
+        c.off_track_timer = 30
+        c.last_track_pos = -1.12
+
+        ap.update_state(c, alpha_deg=0.0, max_dist=36.0, speed_ms=17.0, turn_radius=60.0)
+        self.assertEqual(c.state, ap.STATE_STRAIGHT)
+
+    def test_exit_force_on_large_trackpos_even_low_offtrack_timer(self):
+        c = make_controller()
+        c.state = ap.STATE_EXIT
+        c.phase_timer = 1
+        c.phase_duration = 50
+        c.off_track_timer = 3
+        c.last_track_pos = 1.08
+
+        ap.update_state(c, alpha_deg=1.0, max_dist=38.0, speed_ms=17.0, turn_radius=60.0)
+        self.assertEqual(c.state, ap.STATE_STRAIGHT)
+
+    def test_tight_corner_target_zero_when_near_edge(self):
+        # Replay-like case from report: low speed, tiny max_dist, car already near track limit.
+        constrained = ap.stabilize_target_dynamic(
+            raw_target=-0.85,
+            track_pos=0.995,
+            max_dist=0.4,
+            speed_kmh=14.0,
+        )
+        self.assertAlmostEqual(constrained, 0.0, places=4)
+
+    def test_tight_corner_target_reduced_not_removed(self):
+        raw = 0.82
+        constrained = ap.stabilize_target_dynamic(
+            raw_target=raw,
+            track_pos=0.45,
+            max_dist=6.5,
+            speed_kmh=28.0,
+        )
+        self.assertLess(abs(constrained), abs(raw))
+        self.assertGreater(abs(constrained), 0.05)
+
+    def test_normal_corner_target_unchanged(self):
+        raw = -0.62
+        constrained = ap.stabilize_target_dynamic(
+            raw_target=raw,
+            track_pos=0.2,
+            max_dist=40.0,
+            speed_kmh=90.0,
+        )
+        self.assertAlmostEqual(constrained, raw, places=6)
+
+    def test_recovery_starts_earlier_offtrack(self):
+        c = make_controller()
+        c.off_track_timer = 4
+        c.recovery_state = "NONE"
+        c.stuck_timer = 0
+        c.step = 500
+        c.recovery_timer = 0
+        c.recovery_steer_dir = 0.0
+
+        S = {"angle": 0.2}
+        R = {"gear": 1, "brake": 0.0, "accel": 0.3, "steer": 0.0}
+        handled = ap.update_recovery(c, S, R, track_pos=1.08, speed_x=30.0)
+        self.assertTrue(handled)
+
     def test_corkscrew(self):
         rows = sim.run_corkscrew_simulation(speed_ms=28.0)
         self.assertGreater(len(rows), 150)

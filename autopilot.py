@@ -145,7 +145,7 @@ CORNER_THRESHOLD_DEG = 8.0
 APPROACH_TRIGGER_DEG = 6.5
 PHASE_MIN_FRAMES = 22
 
-AMP_OUTSIDE = 0.50; AMP_APEX = 0.80; AMP_EXIT = 0.65 
+AMP_OUTSIDE = 0.50; AMP_APEX = 0.80; AMP_EXIT = 0.50 
 SMOOTH_STRAIGHT = 0.18; SMOOTH_CORNER = 0.10; SMOOTH_APPROACH = 0.06
 
 def circ_ease_out(t):
@@ -188,7 +188,7 @@ def update_state(c, alpha_deg, max_dist, speed_ms, turn_radius):
     dist_approach = max(60.0, min(100.0, speed_ms * 2.5)) # 2.5 seconds lookahead
 
     if c.state == STATE_STRAIGHT:
-        if abs(alpha_deg) > APPROACH_TRIGGER_DEG and max_dist > dist_turn_in*0.85:
+        if abs(alpha_deg) > APPROACH_TRIGGER_DEG:
             c.state = STATE_APPROACH; c.turn_sign = 1.0 if alpha_deg>0 else -1.0
             c.phase_timer = 0; c.phase_duration = _dur_approach(max_dist, speed_ms, dist_turn_in)
             c.approach_entry_pos = c.target_pos_filtered
@@ -203,17 +203,27 @@ def update_state(c, alpha_deg, max_dist, speed_ms, turn_radius):
 
     elif c.state == STATE_TURN_IN:
         if timer > PHASE_MIN_FRAMES:
-            if max_dist < dist_apex or (max_dist > c.prev_max_dist+6.0 and timer > 25):
+            opening_angle = abs(alpha_deg) < CORNER_THRESHOLD_DEG * 0.75
+            opening_dist = max_dist >= c.prev_max_dist - 0.6
+            stale_turn_in = timer >= int(max(PHASE_MIN_FRAMES + 8, c.phase_duration * 1.15))
+            if (
+                max_dist < dist_apex
+                or (max_dist > c.prev_max_dist + 4.0 and timer > 25)
+                or (opening_angle and opening_dist and timer > PHASE_MIN_FRAMES + 6)
+                or stale_turn_in
+            ):
                 c.state = STATE_EXIT; c.phase_timer = 0
                 arc = getattr(c,'exit_arc_m',20.0)
                 c.phase_duration = int(max(PHASE_MIN_FRAMES, min(90, arc/max(1.0,speed_ms)*TORCS_FPS)))
 
     elif c.state == STATE_EXIT:
-        if timer > PHASE_MIN_FRAMES:
-            force = c.off_track_timer > 80
-            if (abs(alpha_deg) < CORNER_THRESHOLD_DEG/2.0 and max_dist > dist_approach) or force:
+        force = c.off_track_timer > 25 or abs(c.last_track_pos) > 1.05
+        if force:
+            c.state = STATE_STRAIGHT; c.phase_timer = 0; c.phase_duration = 1
+        elif timer > PHASE_MIN_FRAMES:
+            if abs(alpha_deg) < CORNER_THRESHOLD_DEG/2.0 and max_dist > dist_approach:
                 c.state = STATE_STRAIGHT; c.phase_timer = 0; c.phase_duration = 1
-            elif abs(alpha_deg) > CORNER_THRESHOLD_DEG and timer > 30 and not force:
+            elif abs(alpha_deg) > CORNER_THRESHOLD_DEG and timer > 30:
                 c.state = STATE_APPROACH; c.turn_sign = 1.0 if alpha_deg>0 else -1.0
                 c.phase_timer = 0; c.phase_duration = _dur_approach(max_dist, speed_ms, dist_turn_in)
                 c.approach_entry_pos = c.target_pos_filtered
@@ -225,8 +235,26 @@ def get_target_lateral(c):
     if c.state in (STATE_STRAIGHT, STATE_RECOVERY): return 0.0
     if c.state == STATE_APPROACH: return c.approach_entry_pos + (-s*AMP_OUTSIDE-c.approach_entry_pos)*t
     if c.state == STATE_TURN_IN:  return -s*AMP_OUTSIDE + (s*AMP_APEX-(-s*AMP_OUTSIDE))*circ_ease_out(t)
-    if c.state == STATE_EXIT:     return s*AMP_APEX + (-s*AMP_EXIT-s*AMP_APEX)*circ_ease_out(t)
+    if c.state == STATE_EXIT:
+        target = s*AMP_APEX + (-s*AMP_EXIT-s*AMP_APEX)*circ_ease_out(t)
+        edge = abs(getattr(c, 'last_track_pos', 0.0))
+        if edge > 0.95:
+            return 0.0
+        if edge > 0.82:
+            blend = min(1.0, (edge - 0.82) / 0.13)
+            return (1.0 - blend) * target
+        return target
     return 0.0
+
+
+def stabilize_target_dynamic(raw_target, track_pos, max_dist, speed_kmh):
+    # Dynamic center pull: stronger near edges, with short horizon, and at low speed.
+    edge = max(0.0, min(1.0, (abs(track_pos) - 0.72) / 0.36))
+    edge_hard = max(0.0, min(1.0, (abs(track_pos) - 0.92) / 0.06))
+    horizon = max(0.0, min(1.0, (10.0 - max_dist) / 10.0))
+    low_speed = max(0.0, min(1.0, (45.0 - speed_kmh) / 45.0))
+    center_pull = max(edge, edge_hard, horizon * (0.45 + 0.55 * low_speed))
+    return raw_target * (1.0 - center_pull)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -259,13 +287,17 @@ def compute_target_speed(distances, max_dist, curvature, mu_eff, a_brake):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def compute_steering(S, target_pos, c):
-    P=0.38; D=10.0/math.pi; YA=0.25; MAX_R=0.10; DC=0.20
+    P=0.38; YA=0.25; MAX_R=0.10
+    # Inspired by 1m30: stronger yaw damping, especially at lower speed.
+    speed_kmh = max(1.0, S.get('speedX', 0.0))
+    low_speed = max(0.0, min(1.0, (70.0 - speed_kmh) / 70.0))
+    D = (14.0 + 10.0 * low_speed) / math.pi
     c.yaw_f = YA*S['angle'] + (1.0-YA)*c.yaw_f
     err = S['trackPos'] - target_pos
     sp  = -(err*P)
-    sd  = max(-DC, min(DC, c.yaw_f*D))
+    sd  = c.yaw_f*D
     wp  = S['trackPos']
-    wg  = -(wp-0.87)*2.5 if wp>0.87 else -(wp+0.87)*2.5 if wp<-0.87 else 0.0
+    wg  = -(wp-0.84)*2.6 if wp>0.84 else -(wp+0.84)*2.6 if wp<-0.84 else 0.0
     raw = max(-1.0, min(1.0, sp+sd+wg))
 
     # Dampen micro-corrections on straights to avoid left-right oscillation.
@@ -408,7 +440,8 @@ def update_recovery(c, S, R, track_pos, speed_x):
             return True
 
     # Récupération normale en avançant (hors-piste)
-    if abs(track_pos) > 1.0 and c.off_track_timer > 10 and not is_wrong_way:
+    recover_frames = int(max(2, min(8, 0.12 * abs(speed_x))))
+    if abs(track_pos) > 1.0 and c.off_track_timer > recover_frames and not is_wrong_way:
         abs_speed = abs(speed_x)
         
         target_angle = max(-0.8, min(0.8, -track_pos * 0.4))
@@ -535,6 +568,7 @@ def drive(c):
     update_state(c, alpha_deg, max_dist, speed_kmh/3.6, turn_radius)
     t_phase    = min(1.0, c.phase_timer/max(1,c.phase_duration))
     raw_target = get_target_lateral(c)
+    raw_target = stabilize_target_dynamic(raw_target, track_pos, max_dist, speed_kmh)
     smooth = SMOOTH_APPROACH if c.state==STATE_APPROACH else SMOOTH_STRAIGHT if c.state==STATE_STRAIGHT else SMOOTH_CORNER
     c.target_pos_filtered = smooth*raw_target + (1.0-smooth)*c.target_pos_filtered
 

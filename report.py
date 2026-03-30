@@ -436,6 +436,17 @@ def compute_diagnostics(df):
     lap_t = df['lap_time'].max()
     dist  = df['dist_raced'].max() if 'dist_raced' in df.columns else 0
 
+    # State transition diagnostics (explicitly catch stuck state-machine behavior).
+    if 'state' in df.columns:
+        tr = (df['state'].shift(1).fillna(df['state']) + '->' + df['state'])
+        ti_frames = int((df['state'] == 'TURN_IN').sum())
+        exit_frames = int((df['state'] == 'EXIT').sum())
+        ti_to_exit = int((tr == 'TURN_IN->EXIT').sum())
+    else:
+        ti_frames = 0
+        exit_frames = 0
+        ti_to_exit = 0
+
     # Speed by state
     spd_by_state = {st: df[df['state']==st]['speed_x'].mean() if 'state' in df.columns else 0
                     for st in ['STRAIGHT','APPROACH','TURN_IN','EXIT']}
@@ -458,6 +469,9 @@ def compute_diagnostics(df):
             'Kamm violations': f"{over.sum()} ({100*over.mean():.1f}%)" + (' ✗' if over.mean()>0.05 else ' ✓'),
             'Reverse frames': f"{rev.sum()}",
             'Relaunch frames': f"{rel.sum()}",
+            'TURN_IN frames': f"{ti_frames}",
+            'EXIT frames': f"{exit_frames}",
+            'TURN_IN → EXIT transitions': f"{ti_to_exit}" + (' ✗' if ti_frames > 40 and ti_to_exit == 0 else ' ✓'),
         },
         'performance': {
             'Max speed': f"{df['speed_x'].max():.1f} km/h",
@@ -494,6 +508,17 @@ def _find_issues(df):
         over_app = (app['speed_x'] - app['target_speed']).clip(lower=0)
         if over_app.mean() > 15:
             issues.append(('BRAKE', f"Speed > target by {over_app.mean():.0f} km/h in APPROACH → insufficient braking"))
+
+    # State machine: detect missing TURN_IN -> EXIT transitions (stuck in TURN_IN).
+    if 'state' in df.columns:
+        tr = (df['state'].shift(1).fillna(df['state']) + '->' + df['state'])
+        ti_frames = int((df['state'] == 'TURN_IN').sum())
+        exit_frames = int((df['state'] == 'EXIT').sum())
+        ti_to_exit = int((tr == 'TURN_IN->EXIT').sum())
+        if ti_frames > 40 and ti_to_exit == 0:
+            issues.append(('STATE_MACHINE', f"No TURN_IN->EXIT transitions ({ti_frames} TURN_IN frames, {exit_frames} EXIT frames)"))
+        elif ti_frames > 40 and (exit_frames / max(ti_frames, 1)) < 0.15:
+            issues.append(('STATE_MACHINE', f"Low EXIT coverage vs TURN_IN ({exit_frames}/{ti_frames} frames)"))
 
     # Saturated steer off-track
     ot_steer = df[df['off_track']]['steer'].abs() if ot.any() else pd.Series()
@@ -577,6 +602,7 @@ def panel_lateral_velocity(df):
 
 ISSUE_COLORS = {'CRITICAL':'#ff4444','PHYSICS':'#ff8c00','TRAJECTORY':'#ffcc00',
                 'BRAKE':'#ff6b35','RECOVERY':'#c084fc','REVERSE':'#ff85a1','OK':'#7bed9f'}
+ISSUE_COLORS['STATE_MACHINE'] = '#ffd166'
 
 def _legend_states(ax):
     patches = [mpatches.Patch(color=c, alpha=0.5, label=s) for s,c in STATE_COLORS.items()] if hasattr(STATE_COLORS, 'items') else []

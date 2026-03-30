@@ -29,7 +29,18 @@ def make_controller(speed_ms=28.0):
 
 def parse_corkscrew_segments(xml_path=None):
     if xml_path is None:
-        xml_path = Path(__file__).resolve().parent / "sources-xml" / "corkscrew.xml"
+        base = Path(__file__).resolve().parent
+        candidates = [
+            base / "game-sources" / "corkscrew.xml",
+            base / "sources-xml" / "corkscrew.xml",
+        ]
+        xml_path = None
+        for p in candidates:
+            if p.exists():
+                xml_path = p
+                break
+        if xml_path is None:
+            raise FileNotFoundError("corkscrew.xml not found in game-sources/ or sources-xml/")
 
     xml_text = Path(xml_path).read_text(encoding="utf-8")
     xml_text = re.sub(r"<!DOCTYPE[^>]*\[[\s\S]*?\]>", "", xml_text, flags=re.MULTILINE)
