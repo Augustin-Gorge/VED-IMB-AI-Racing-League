@@ -372,7 +372,7 @@ def update_recovery(c, S, R, track_pos, speed_x):
             R['gear'] = 1
             R['brake'] = 0.0
             R['steer'] = -c.recovery_steer_dir # Steer opposite to continue the same rotation
-            R['accel'] = 1.0 if speed_x < 25.0 else 0.0
+            R['accel'] = 0.6 if speed_x < 25.0 else 0.0
             
             c.recovery_timer -= 1
             is_aligned = math.cos(_ang) > 0.5 
@@ -591,21 +591,17 @@ if __name__ == "__main__":
 
     print("Driving...")
 
-    try:
-        for _ in range(C.maxSteps, 0, -1):
-            C.get_servers_input()
-            if not C.so: break
-            drive(C)
-            C.respond_to_server()
-    except KeyboardInterrupt:
-        print("\nArrêt manuel détecté. Sauvegarde en cours...")
-    finally:
-        if C.so: C.shutdown()
-        save_telemetry(C)
-
-        _report = os.path.join(_here, 'report.py')
-        if os.path.exists(_report):
-            import subprocess
-            subprocess.run([sys.executable, _report, C.telemetry_path], timeout=120)
-        else:
-            print(f"[REPORT] report.py not found at {_report}")
+    for _ in range(C.maxSteps, 0, -1):
+        C.get_servers_input()
+        if not C.so: break
+        drive(C)
+        C.respond_to_server()
+    
+    save_telemetry(C)
+    
+    _report = os.path.join(_here, 'report.py')
+    if os.path.exists(_report):
+        import subprocess
+        subprocess.run([sys.executable, _report, C.telemetry_path], timeout=120)
+    else:
+        print(f"[REPORT] report.py not found at {_report}")
