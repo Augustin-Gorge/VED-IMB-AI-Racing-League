@@ -94,7 +94,7 @@ class Client:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  CONSTANTES PHYSIQUES — car1-ow1.xml + corkscrew.xml
+#  PHYSICAL CONSTANTS — car1-ow1.xml + corkscrew.xml
 # ═══════════════════════════════════════════════════════════════════════════════
 
 MAX_SPEED_KMH       = 300.0
@@ -142,8 +142,6 @@ STATE_EXIT     = "EXIT"
 STATE_RECOVERY = "RECOVERY"
 
 CORNER_THRESHOLD_DEG = 8.0
-
-DIST_APPROACH = 78.0; DIST_TURN_IN = 62.0; DIST_APEX = 44.0
 PHASE_MIN_FRAMES = 22
 
 AMP_OUTSIDE = 0.70; AMP_APEX = 0.82; AMP_EXIT = 0.65 
@@ -157,8 +155,8 @@ def circ_ease_in(t):
     t = max(0.0, min(1.0, t))
     return 1.0 - math.sqrt(max(0.0, 1.0 - t*t))
 
-def _dur_approach(max_dist, v):
-    return int(max(PHASE_MIN_FRAMES, min(100, max(5.0,max_dist-DIST_TURN_IN)/max(1.0,v)*TORCS_FPS)))
+def _dur_approach(max_dist, v, turn_in_threshold):
+    return int(max(PHASE_MIN_FRAMES, min(100, max(5.0,max_dist-turn_in_threshold)/max(1.0,v)*TORCS_FPS)))
 
 def _dur_arc(r, a_rad, v, lo=PHASE_MIN_FRAMES, hi=70):
     arc = max(2.0, r*max(0.05,abs(a_rad)))
@@ -183,15 +181,20 @@ def update_state(c, alpha_deg, max_dist, speed_ms, turn_radius):
     if abs(c.last_speed_ms) < 3.0/3.6:
         c.phase_timer += 1; c.prev_max_dist = max_dist; return
 
+    # Dynamic distance thresholds based on speed and curvature
+    dist_turn_in = max(40.0, min(80.0, speed_ms * 2.0))  # 2 seconds lookahead
+    dist_apex = max(25.0, min(60.0, speed_ms * 1.2))     # 1.2 seconds lookahead
+    dist_approach = max(60.0, min(100.0, speed_ms * 2.5)) # 2.5 seconds lookahead
+
     if c.state == STATE_STRAIGHT:
-        if abs(alpha_deg) > CORNER_THRESHOLD_DEG and max_dist > DIST_TURN_IN:
+        if abs(alpha_deg) > CORNER_THRESHOLD_DEG and max_dist > dist_turn_in:
             c.state = STATE_APPROACH; c.turn_sign = 1.0 if alpha_deg>0 else -1.0
-            c.phase_timer = 0; c.phase_duration = _dur_approach(max_dist, speed_ms)
+            c.phase_timer = 0; c.phase_duration = _dur_approach(max_dist, speed_ms, dist_turn_in)
             c.approach_entry_pos = c.target_pos_filtered
 
     elif c.state == STATE_APPROACH:
         if timer > PHASE_MIN_FRAMES:
-            if max_dist < DIST_TURN_IN:
+            if max_dist < dist_turn_in:
                 c.state = STATE_TURN_IN; c.phase_timer = 0
                 c.phase_duration, c.exit_arc_m = _dur_arc(turn_radius, a_rad, speed_ms, hi=65)
             elif abs(alpha_deg) < CORNER_THRESHOLD_DEG/2.0 and abs(c.last_track_pos) < 0.90:
@@ -199,7 +202,7 @@ def update_state(c, alpha_deg, max_dist, speed_ms, turn_radius):
 
     elif c.state == STATE_TURN_IN:
         if timer > PHASE_MIN_FRAMES:
-            if max_dist < DIST_APEX or (max_dist > c.prev_max_dist+6.0 and timer > 25):
+            if max_dist < dist_apex or (max_dist > c.prev_max_dist+6.0 and timer > 25):
                 c.state = STATE_EXIT; c.phase_timer = 0
                 arc = getattr(c,'exit_arc_m',20.0)
                 c.phase_duration = int(max(PHASE_MIN_FRAMES, min(90, arc/max(1.0,speed_ms)*TORCS_FPS)))
@@ -207,11 +210,11 @@ def update_state(c, alpha_deg, max_dist, speed_ms, turn_radius):
     elif c.state == STATE_EXIT:
         if timer > PHASE_MIN_FRAMES:
             force = c.off_track_timer > 80
-            if (abs(alpha_deg) < CORNER_THRESHOLD_DEG/2.0 and max_dist > DIST_APPROACH) or force:
+            if (abs(alpha_deg) < CORNER_THRESHOLD_DEG/2.0 and max_dist > dist_approach) or force:
                 c.state = STATE_STRAIGHT; c.phase_timer = 0; c.phase_duration = 1
             elif abs(alpha_deg) > CORNER_THRESHOLD_DEG and timer > 30 and not force:
                 c.state = STATE_APPROACH; c.turn_sign = 1.0 if alpha_deg>0 else -1.0
-                c.phase_timer = 0; c.phase_duration = _dur_approach(max_dist, speed_ms)
+                c.phase_timer = 0; c.phase_duration = _dur_approach(max_dist, speed_ms, dist_turn_in)
                 c.approach_entry_pos = c.target_pos_filtered
 
     c.phase_timer += 1; c.prev_max_dist = max_dist
@@ -226,7 +229,7 @@ def get_target_lateral(c):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  VITESSE CIBLE
+#  TARGET SPEED
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _v_apex_from_k(k, mu_eff):
@@ -357,10 +360,10 @@ def update_recovery(c, S, R, track_pos, speed_x):
             c.recovery_timer -= 1
             is_aligned = math.cos(_ang) > 0.5 
             
-            # Anti-blocage mur arrière : si on n'arrive pas à reculer (vitesse stagne vers zéro) après 40 frames
+            # Anti-stuck rear wall: if unable to reverse (speed stalls near zero) after 40 frames
             if c.recovery_timer < 80 and speed_x > -2.0:
                 c.recovery_state = "FWD_TURN"
-                c.recovery_timer = 100 # On part vers l'avant pour dégager l'arrière
+                c.recovery_timer = 100 # Go forward to unstick the rear
             elif is_aligned or c.recovery_timer <= 0:
                 c.recovery_state = "WAIT_FWD"
             return True
@@ -368,16 +371,16 @@ def update_recovery(c, S, R, track_pos, speed_x):
         elif c.recovery_state == "FWD_TURN":
             R['gear'] = 1
             R['brake'] = 0.0
-            R['steer'] = -c.recovery_steer_dir # On braque à l'opposé pour continuer la même rotation
+            R['steer'] = -c.recovery_steer_dir # Steer opposite to continue the same rotation
             R['accel'] = 1.0 if speed_x < 25.0 else 0.0
             
             c.recovery_timer -= 1
             is_aligned = math.cos(_ang) > 0.5 
             
-            # Anti-blocage mur avant : si on n'arrive pas à avancer après 40 frames
+            # Anti-stuck front wall: if unable to move forward after 40 frames
             if c.recovery_timer < 60 and speed_x < 2.0:
                 c.recovery_state = "J_TURN"
-                c.recovery_timer = 120 # On repart en arrière
+                c.recovery_timer = 120 # Go back in reverse
             elif is_aligned or c.recovery_timer <= 0:
                 c.recovery_state = "WAIT_FWD"
             return True
@@ -423,7 +426,7 @@ def update_recovery(c, S, R, track_pos, speed_x):
     return False
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  TÉLÉMÉTRIE
+#  TELEMETRY
 # ═══════════════════════════════════════════════════════════════════════════════
 
 CSV_HEADER = (
@@ -532,7 +535,7 @@ def drive(c):
     elif c.state == STATE_TURN_IN:
         target_speed = min(target_speed_raw, getattr(c, 'committed_apex_speed', MAX_SPEED_KMH))
     elif c.state == STATE_RECOVERY:
-        target_speed = 20.0 # Vitesse arbitraire pour la télémétrie locale en mode recovery
+        target_speed = 20.0 # Arbitrary speed for local telemetry in recovery mode
     else:
         if abs(track_pos) >= 0.95:
             target_speed = min(target_speed_raw, getattr(c, 'committed_apex_speed', MAX_SPEED_KMH))
@@ -605,4 +608,4 @@ if __name__ == "__main__":
             import subprocess
             subprocess.run([sys.executable, _report, C.telemetry_path], timeout=120)
         else:
-            print(f"[REPORT] report.py introuvable à {_report}")
+            print(f"[REPORT] report.py not found at {_report}")

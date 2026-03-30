@@ -31,7 +31,7 @@ RED = '#ff4444'; GRN = '#7bed9f'; YEL = '#ffcc00'; BLU = '#4a9eff'; GRY = '#555'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  CHARGEMENT
+#  DATA LOADING
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def load(path):
@@ -75,7 +75,7 @@ def state_segments(df, ax, alpha=0.10):
             prev_s, prev_d = row['state'], row['dist']
 
 def off_track_spans(df, ax, alpha=0.15):
-    """Zones hors piste en rouge."""
+    """Off-track zones in red."""
     in_ot = False
     for _, row in df.iterrows():
         if row['off_track'] and not in_ot:
@@ -112,7 +112,7 @@ def stat_box(ax, stats_dict, title=''):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def panel_speed_trace(df):
-    """Speed trace F1 — vitesse + cible, colorée par état + zones hors piste."""
+    """Speed trace F1 — speed + target, colored by state + off-track zones."""
     fig, ax = plt.subplots(figsize=(14, 3.5))
     state_segments(df, ax, alpha=0.08)
     off_track_spans(df, ax)
@@ -150,7 +150,7 @@ def panel_pedals(df):
     return fig
 
 def panel_kamm_circle(df):
-    """Cercle de Kamm — scatter steer vs brake, coloré par vitesse."""
+    """Kamm Circle — scatter steer vs brake, colored by speed."""
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 
     # Scatter
@@ -183,7 +183,7 @@ def panel_kamm_circle(df):
     return fig
 
 def panel_lateral(df):
-    """Trajectoire latérale vs cible — erreur de ligne."""
+    """Lateral trajectory vs target — line error."""
     fig, axes = plt.subplots(3, 1, figsize=(14, 7), sharex=True)
     fig.subplots_adjust(hspace=0.05)
 
@@ -242,7 +242,7 @@ def panel_longitudinal_g(df):
     return fig
 
 def panel_braking_points(df):
-    """Analyse des points de freinage — vitesse vs target, delta."""
+    """Braking point analysis — speed vs target, delta."""
     fig, axes = plt.subplots(2, 1, figsize=(14, 5), sharex=True)
     fig.subplots_adjust(hspace=0.05)
 
@@ -259,14 +259,15 @@ def panel_braking_points(df):
     state_segments(df, ax2, alpha=0.06)
     ax2.plot(df['dist'], df['max_dist'], color=BLU, lw=0.8, label='max_dist')
     ax2.plot(df['dist'], df['max_dist_raw'], color=GRY, lw=0.5, ls=':', label='max_dist_raw')
-    ax2.axhline(62, color=YEL, lw=0.5, ls='--', label='DIST_TURN_IN')
-    ax2.axhline(44, color=RED, lw=0.5, ls='--', label='DIST_APEX')
+    # Dynamic thresholds (speed-based): shown as reference bands
+    ax2.axhspan(40, 80, color=YEL, alpha=0.05, label='TURN_IN range')
+    ax2.axhspan(25, 60, color=RED, alpha=0.05, label='APEX range')
     ax2.set_ylabel('Sensor distance (m)'); ax2.set_xlabel('Distance (m)')
     ax2.legend(fontsize=7, ncol=4); ax2.grid(True, axis='y')
     return fig
 
 def panel_rpm_gear(df):
-    """RPM + vitesses par rapport — style histogramme F1."""
+    """RPM + speeds per gear — F1 histogram style."""
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
 
     ax = axes[0]
@@ -435,11 +436,11 @@ def compute_diagnostics(df):
     lap_t = df['lap_time'].max()
     dist  = df['dist_raced'].max() if 'dist_raced' in df.columns else 0
 
-    # Vitesse par état
+    # Speed by state
     spd_by_state = {st: df[df['state']==st]['speed_x'].mean() if 'state' in df.columns else 0
                     for st in ['STRAIGHT','APPROACH','TURN_IN','EXIT']}
 
-    # Freinage: delta moyen speed-target en APPROACH/TURN_IN
+    # Braking: average delta speed-target in APPROACH/TURN_IN
     brake_states = df[df['state'].isin(['APPROACH','TURN_IN'])] if 'state' in df.columns else df
     over_speed_mean = (brake_states['speed_x'] - brake_states['target_speed']).clip(lower=0).mean()
     brake_eff = 100*(1 - over_speed_mean/max(brake_states['speed_x'].mean(),1))
@@ -448,70 +449,70 @@ def compute_diagnostics(df):
 
     diag = {
         'session': {
-            'Frames totaux': n,
+            'Total frames': n,
             'Lap time': f"{lap_t:.2f}s",
-            'Distance parcourue': f"{dist:.0f}m",
-            'Frames hors piste': f"{ot.sum()} ({100*ot.mean():.1f}%)",
-            'Premier OT': f"step {first_ot} ({first_ot_state}, {first_ot_speed:.0f} km/h)" if first_ot else "✓ Aucun",
+            'Distance traveled': f"{dist:.0f}m",
+            'Off-track frames': f"{ot.sum()} ({100*ot.mean():.1f}%)",
+            'First OT': f"step {first_ot} ({first_ot_state}, {first_ot_speed:.0f} km/h)" if first_ot else "✓ None",
             'trackPos max': f"{max_pos:.3f}" + (' ✗' if max_pos>2 else ' ✓'),
-            'Violations Kamm': f"{over.sum()} ({100*over.mean():.1f}%)" + (' ✗' if over.mean()>0.05 else ' ✓'),
-            'Frames reverse': f"{rev.sum()}",
-            'Frames relaunch': f"{rel.sum()}",
+            'Kamm violations': f"{over.sum()} ({100*over.mean():.1f}%)" + (' ✗' if over.mean()>0.05 else ' ✓'),
+            'Reverse frames': f"{rev.sum()}",
+            'Relaunch frames': f"{rel.sum()}",
         },
         'performance': {
-            'Vitesse max': f"{df['speed_x'].max():.1f} km/h",
-            'Vitesse moy': f"{df['speed_x'].mean():.1f} km/h",
-            'Vit moy STRAIGHT': f"{spd_by_state['STRAIGHT']:.1f} km/h",
-            'Vit moy TURN_IN': f"{spd_by_state['TURN_IN']:.1f} km/h",
-            'Over-speed moy (APPROACH+TI)': f"{over_speed_mean:.1f} km/h" + (' ✗' if over_speed_mean>10 else ' ✓'),
-            'Efficacité freinage': f"{brake_eff:.1f}%" + (' ✓' if brake_eff>85 else ' ✗'),
-            'Slip max (wheelspin)': f"{df['slip_rear'].abs().max():.1f} rad/s",
+            'Max speed': f"{df['speed_x'].max():.1f} km/h",
+            'Avg speed': f"{df['speed_x'].mean():.1f} km/h",
+            'Avg speed STRAIGHT': f"{spd_by_state['STRAIGHT']:.1f} km/h",
+            'Avg speed TURN_IN': f"{spd_by_state['TURN_IN']:.1f} km/h",
+            'Avg over-speed (APPROACH+TI)': f"{over_speed_mean:.1f} km/h" + (' ✗' if over_speed_mean>10 else ' ✓'),
+            'Braking efficiency': f"{brake_eff:.1f}%" + (' ✓' if brake_eff>85 else ' ✗'),
+            'Max slip (wheelspin)': f"{df['slip_rear'].abs().max():.1f} rad/s",
         },
         'issues': _find_issues(df),
     }
     return diag
 
 def _find_issues(df):
-    """Détecte automatiquement les problèmes récurrents."""
+    """Automatically detects recurring problems."""
     issues = []
     ot = df['off_track']
     over = df['kamm_over']
 
     if ot.mean() > 0.10:
-        issues.append(('CRITIQUE', f"Hors piste {100*ot.mean():.0f}% du temps"))
+        issues.append(('CRITICAL', f"Off-track {100*ot.mean():.0f}% of the time"))
     if over.mean() > 0.05:
-        issues.append(('PHYSIQUE', f"Cercle de Kamm violé {100*over.mean():.0f}% du temps → grip perdu"))
+        issues.append(('PHYSICS', f"Kamm circle violated {100*over.mean():.0f}% of the time → grip loss"))
 
-    # Vitesse à l'entrée de TURN_IN
+    # Speed at TURN_IN entry
     ti = df[df['state']=='TURN_IN']['speed_x'] if 'state' in df.columns else pd.Series()
     if len(ti) and ti.mean() > 180:
-        issues.append(('TRAJECTOIRE', f"Entrée TURN_IN trop rapide : {ti.mean():.0f} km/h moy (cible <150)"))
+        issues.append(('TRAJECTORY', f"TURN_IN entry too fast: {ti.mean():.0f} km/h avg (target <150)"))
 
-    # Over-speed en APPROACH
+    # Over-speed in APPROACH
     if 'state' in df.columns:
         app = df[df['state']=='APPROACH']
         over_app = (app['speed_x'] - app['target_speed']).clip(lower=0)
         if over_app.mean() > 15:
-            issues.append(('FREIN', f"Vitesse > cible de {over_app.mean():.0f} km/h en APPROACH → freinage insuffisant"))
+            issues.append(('BRAKE', f"Speed > target by {over_app.mean():.0f} km/h in APPROACH → insufficient braking"))
 
-    # Steer saturé hors piste
+    # Saturated steer off-track
     ot_steer = df[df['off_track']]['steer'].abs() if ot.any() else pd.Series()
     if len(ot_steer) and ot_steer.mean() > 0.8:
-        issues.append(('RECOVERY', f"Steer saturé ({ot_steer.mean():.2f}) hors piste → machine à états bloquée"))
+        issues.append(('RECOVERY', f"Steer saturated ({ot_steer.mean():.2f}) off-track → stuck state machine"))
 
-    # Reverse inefficace (pos empire pendant reverse)
+    # Ineffective reverse (position worsens during reverse)
     rev_frames = df[df['reverse_timer']>0] if 'reverse_timer' in df.columns else df[df['recovery_state'] == 2] if 'recovery_state' in df.columns else pd.DataFrame()
     if len(rev_frames) > 10:
-        # Amélioration = |trackPos| diminue pendant le reverse
+        # Improvement = |trackPos| decreases during reverse
         pos_trend = rev_frames['track_pos'].abs().diff().mean()
         if pos_trend > 0.005:
-            issues.append(('REVERSE', f"Reverse inefficace : |pos| empire (+{pos_trend:.4f}/fr)"))
+            issues.append(('REVERSE', f"Ineffective reverse: |pos| worsens (+{pos_trend:.4f}/fr)"))
         elif pos_trend < -0.005:
-            pass  # bon : la voiture revient vers la piste
+            pass  # good: car returns towards track
         else:
-            issues.append(('REVERSE', f"Reverse neutre — vérifier l\'angle de sortie"))
+            issues.append(('REVERSE', f"Neutral reverse — check exit angle"))
 
-    # Vitesse latérale à l'entrée d'APPROACH
+    # Lateral speed at APPROACH entry
     if 'state' in df.columns:
         df2 = df.copy()
         df2['lat_vel'] = df2['track_pos'].diff() * 50 * 6  # m/s
@@ -522,22 +523,22 @@ def _find_issues(df):
         if entries:
             avg_lat = np.mean([abs(v) for v in entries])
             if avg_lat > 5.0:
-                issues.append(('TRAJECTOIRE', f"Vitesse latérale à l\'entrée APPROACH: {avg_lat:.1f} m/s → momentum EXIT trop élevé"))
+                issues.append(('TRAJECTORY', f"Lateral speed at APPROACH entry: {avg_lat:.1f} m/s → EXIT momentum too high"))
 
-    # Angle au relaunch
+    # Angle at relaunch
     rl = df[df['relaunch_timer']>0] if 'relaunch_timer' in df.columns else df[df['recovery_state'] == 4] if 'recovery_state' in df.columns else pd.DataFrame()
     if len(rl) > 5:
         avg_angle_deg = abs(np.degrees(rl['angle'].mean())) if 'angle' in rl else 0
         if avg_angle_deg > 45:
-            issues.append(('RECOVERY', f"Relaunch avec angle {avg_angle_deg:.0f}° → voiture roule de travers"))
+            issues.append(('RECOVERY', f"Relaunch at angle {avg_angle_deg:.0f}° → car moving sideways"))
 
     if not issues:
-        issues.append(('OK', 'Aucun problème critique détecté'))
+        issues.append(('OK', 'No critical problems detected'))
     return issues
 
 
 def panel_lateral_velocity(df):
-    """Vitesse latérale trackPos — diagnostic momentum EXIT→APPROACH."""
+    """Lateral speed trackPos — EXIT→APPROACH momentum diagnostic."""
     fig, axes = plt.subplots(2, 1, figsize=(14, 5), sharex=True)
     fig.subplots_adjust(hspace=0.05)
 
@@ -557,7 +558,7 @@ def panel_lateral_velocity(df):
                 v = df2.iloc[i]['lat_vel']
                 ax.axvline(df2.iloc[i]['dist'], color=YEL, lw=1, ls=':', alpha=0.7)
                 ax.text(df2.iloc[i]['dist'], v, f'{v:.1f}', fontsize=7, color=YEL)
-    ax.set_ylabel('Vitesse latérale (m/s)'); ax.legend(fontsize=7); ax.grid(True, axis='y')
+    ax.set_ylabel('Lateral speed (m/s)'); ax.legend(fontsize=7); ax.grid(True, axis='y')
     ax.set_title('LATERAL VELOCITY — momentum EXIT→APPROACH (yellow = transition)')
 
     ax2 = axes[1]
@@ -571,11 +572,11 @@ def panel_lateral_velocity(df):
     return fig
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  RAPPORT HTML
+#  HTML REPORT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-ISSUE_COLORS = {'CRITIQUE':'#ff4444','PHYSIQUE':'#ff8c00','TRAJECTOIRE':'#ffcc00',
-                'FREIN':'#ff6b35','RECOVERY':'#c084fc','REVERSE':'#ff85a1','OK':'#7bed9f'}
+ISSUE_COLORS = {'CRITICAL':'#ff4444','PHYSICS':'#ff8c00','TRAJECTORY':'#ffcc00',
+                'BRAKE':'#ff6b35','RECOVERY':'#c084fc','REVERSE':'#ff85a1','OK':'#7bed9f'}
 
 def _legend_states(ax):
     patches = [mpatches.Patch(color=c, alpha=0.5, label=s) for s,c in STATE_COLORS.items()] if hasattr(STATE_COLORS, 'items') else []
@@ -589,21 +590,21 @@ def generate_report(csv_path):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     out_dir = os.path.join(script_dir, 'report')
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, 'rapport.html')
+    out_path = os.path.join(out_dir, 'report.html')
 
     panels = [
         ('Speed trace',          panel_speed_trace(df)),
-        ('Commandes pédales',    panel_pedals(df)),
-        ('Cercle de Kamm',       panel_kamm_circle(df)),
-        ('Trajectoire latérale', panel_lateral(df)),
+        ('Pedal controls',       panel_pedals(df)),
+        ('Kamm circle',          panel_kamm_circle(df)),
+        ('Lateral trajectory',   panel_lateral(df)),
         ('G-forces',             panel_longitudinal_g(df)),
-        ('Points de freinage',   panel_braking_points(df)),
-        ('RPM & Vitesses/gear',  panel_rpm_gear(df)),
-        ('Récupération',         panel_recovery_timeline(df)),
+        ('Braking points',       panel_braking_points(df)),
+        ('RPM & Speeds/gear',    panel_rpm_gear(df)),
+        ('Recovery',             panel_recovery_timeline(df)),
         ('Wheelspin & TC',       panel_wheelspin(df)),
-        ('Capteurs & Courbure',  panel_curvature_sensor(df)),
-        ('Carte circuit',        panel_circuit_map(df)),
-        ('Vitesse laterale',     panel_lateral_velocity(df)),
+        ('Sensors & Curvature',  panel_curvature_sensor(df)),
+        ('Circuit map',          panel_circuit_map(df)),
+        ('Lateral speed',        panel_lateral_velocity(df)),
     ]
     imgs = [(title, fig_to_b64(fig)) for title, fig in panels]
 
@@ -631,10 +632,10 @@ def generate_report(csv_path):
         </div>'''
 
     html = f'''<!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>TORCS Rapport Télémétrie</title>
+<title>TORCS Telemetry Report</title>
 <style>
   * {{ box-sizing:border-box; margin:0; padding:0 }}
   body {{ background:#0a0a0a; color:#ccc; font-family:monospace; font-size:13px; padding:20px }}
@@ -654,8 +655,8 @@ def generate_report(csv_path):
 </style>
 </head>
 <body>
-<h1>🏎  TORCS Autopilot — Rapport Télémétrie</h1>
-<p class="meta">Fichier : {os.path.basename(csv_path)} | Généré : {ts}</p>
+<h1>🏎  TORCS Autopilot — Telemetry Report</h1>
+<p class="meta">File: {os.path.basename(csv_path)} | Generated: {ts}</p>
 
 <div class="grid3">
   <div class="card">
@@ -667,7 +668,7 @@ def generate_report(csv_path):
     <table>{stat_rows(stat_p)}</table>
   </div>
   <div class="card">
-    <h2>⚠ Diagnostics automatiques</h2>
+    <h2>⚠ Automatic diagnostics</h2>
     <table class="issue-table">{issue_rows(issues)}</table>
   </div>
 </div>
@@ -683,7 +684,7 @@ def generate_report(csv_path):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  RAPPORT MARKDOWN — léger, pensé pour être collé dans une session IA
+#  MARKDOWN REPORT — lightweight, designed to be pasted in an AI session
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def generate_md_report(csv_path):
@@ -694,12 +695,12 @@ def generate_md_report(csv_path):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     out_dir = os.path.join(script_dir, 'report')
     os.makedirs(out_dir, exist_ok=True)
-    out  = os.path.join(out_dir, 'rapport.md')
+    out  = os.path.join(out_dir, 'report.md')
 
     lines = []
     w = lines.append   # alias
 
-    # ── En-tête ───────────────────────────────────────────────────────────────
+    # ── Header ────────────────────────────────────────────────────────────────
     w(f"# TORCS Telemetry Report")
     w(f"")
     w(f"**File:** `{os.path.basename(csv_path)}`  ")
@@ -729,11 +730,11 @@ def generate_md_report(csv_path):
     w("## Diagnostics")
     w("")
     for cat, msg in diag['issues']:
-        icon = "✅" if cat == "OK" else "⚠️" if cat in ("TRAJECTOIRE","FREIN","PHYSIQUE") else "🔴"
+        icon = "✅" if cat == "OK" else "⚠️" if cat in ("TRAJECTORY","BRAKE","PHYSICS") else "🔴"
         w(f"- **[{cat}]** {icon} {msg}")
     w("")
 
-    # ── Vitesse par état ──────────────────────────────────────────────────────
+    # ── Speed by state ────────────────────────────────────────────────────────
     w("## Speed by state")
     w("")
     w("| State | Mean (km/h) | Min | Max | Frames | % total |")
@@ -929,7 +930,7 @@ def generate_md_report(csv_path):
 
     # ── Footer ────────────────────────────────────────────────────────────────
     w("---")
-    w(f"_Report generated by analyse.py — {ts}_")
+    w(f"_Report generated by report.py — {ts}_")
 
     md_text = "\n".join(lines)
     with open(out, 'w', encoding='utf-8') as f:
@@ -945,7 +946,7 @@ def generate_md_report(csv_path):
 if __name__ == "__main__":
     _parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
-    # Cherche en priorité le csv dans /report si aucun argument n'est fourni.
+    # Prioritize csv in /report if no argument provided.
     default_csv_report = os.path.join(_parent, "report", "telemetry.csv")
     default_csv_root = os.path.join(_parent, "telemetry.csv")
     
@@ -957,7 +958,7 @@ if __name__ == "__main__":
         csv = default_csv_root
 
     if not os.path.exists(csv):
-        print(f"Fichier introuvable : {csv}")
+        print(f"File not found: {csv}")
         sys.exit(1)
         
     generate_report(csv)
