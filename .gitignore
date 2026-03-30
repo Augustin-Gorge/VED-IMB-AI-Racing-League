@@ -1,2 +1,3 @@
 /report/*
 !/report/.gitkeep
+__pycache__/

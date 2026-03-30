@@ -142,9 +142,10 @@ STATE_EXIT     = "EXIT"
 STATE_RECOVERY = "RECOVERY"
 
 CORNER_THRESHOLD_DEG = 8.0
+APPROACH_TRIGGER_DEG = 6.5
 PHASE_MIN_FRAMES = 22
 
-AMP_OUTSIDE = 0.60; AMP_APEX = 0.80; AMP_EXIT = 0.65 
+AMP_OUTSIDE = 0.50; AMP_APEX = 0.80; AMP_EXIT = 0.65 
 SMOOTH_STRAIGHT = 0.18; SMOOTH_CORNER = 0.10; SMOOTH_APPROACH = 0.06
 
 def circ_ease_out(t):
@@ -182,12 +183,12 @@ def update_state(c, alpha_deg, max_dist, speed_ms, turn_radius):
         c.phase_timer += 1; c.prev_max_dist = max_dist; return
 
     # Dynamic distance thresholds based on speed and curvature
-    dist_turn_in = max(40.0, min(80.0, speed_ms * 2.0))  # 2 seconds lookahead
+    dist_turn_in = max(32.0, min(70.0, speed_ms * 1.6))  # earlier approach trigger
     dist_apex = max(25.0, min(60.0, speed_ms * 1.2))     # 1.2 seconds lookahead
     dist_approach = max(60.0, min(100.0, speed_ms * 2.5)) # 2.5 seconds lookahead
 
     if c.state == STATE_STRAIGHT:
-        if abs(alpha_deg) > CORNER_THRESHOLD_DEG and max_dist > dist_turn_in:
+        if abs(alpha_deg) > APPROACH_TRIGGER_DEG and max_dist > dist_turn_in*0.85:
             c.state = STATE_APPROACH; c.turn_sign = 1.0 if alpha_deg>0 else -1.0
             c.phase_timer = 0; c.phase_duration = _dur_approach(max_dist, speed_ms, dist_turn_in)
             c.approach_entry_pos = c.target_pos_filtered
@@ -238,10 +239,11 @@ def _v_apex_from_k(k, mu_eff):
     return math.sqrt((mu_eff*CAR_MASS*G)/d) if d>0.05 else MAX_SPEED_KMH/3.6
 
 def compute_target_speed(distances, max_dist, curvature, mu_eff, a_brake):
-    d_b = max(0.0, max_dist-10.0)
+    # Keep extra braking reserve so deceleration starts earlier before the apex.
+    d_b = max(0.0, max_dist-20.0)
     
     def tgt_from_k(k):
-        return min(MAX_SPEED_KMH, math.sqrt(max(0.0,_v_apex_from_k(k,mu_eff)**2*0.81 + 2.0*a_brake*d_b))*3.6)
+        return min(MAX_SPEED_KMH, math.sqrt(max(0.0,_v_apex_from_k(k,mu_eff)**2*0.72 + 2.0*a_brake*d_b))*3.6)
         
     target = tgt_from_k(curvature)
     for i in range(1, 18):
